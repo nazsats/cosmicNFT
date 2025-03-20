@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+
+body {
+  font-family: var(--font-poppins), sans-serif;
+}
+
+/* NFT Cycle Animation */
+.animate-nft-cycle {
+  position: relative;
+  animation: nftCycle 12s infinite ease-in-out;
+}
+
+.animate-nft-cycle img:nth-child(1) { animation: fade 12s infinite; }
+.animate-nft-cycle img:nth-child(2) { animation: fade 12s infinite 2.4s; }
+.animate-nft-cycle img:nth-child(3) { animation: fade 12s infinite 4.8s; }
+.animate-nft-cycle img:nth-child(4) { animation: fade 12s infinite 7.2s; }
+.animate-nft-cycle img:nth-child(5) { animation: fade 12s infinite 9.6s; }
+
+@keyframes fade {
+  0%, 100% { opacity: 0; transform: scale(1) rotate(0deg); }
+  10%, 30% { opacity: 1; transform: scale(1.02) rotate(1deg); }
+  40%, 90% { opacity: 0; transform: scale(1) rotate(-1deg); }
+}
+
+/* Stepper Entrance Animation */
+.animate-stepper-entrance {
+  animation: stepperEntrance 0.5s ease-out;
+}
+
+@keyframes stepperEntrance {
+  0% { opacity: 0; transform: scale(0.9); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Number Change Animation */
+.animate-number-change {
+  animation: numberChange 0.3s ease-in-out;
+}
+
+@keyframes numberChange {
+  0% { opacity: 0; transform: translateY(8px); }
+  50% { opacity: 0.5; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* Progress Bar Animation */
+.animate-progress {
+  animation: progressBar 1s ease-out forwards;
+}
+
+@keyframes progressBar {
+  0% { width: 0%; }
+}
+
+/* Ethereum Logo Pulse Animation */
+.animate-pulse-glow {
+  animation: pulseGlow 2s infinite ease-in-out;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(34, 211, 238, 0.5)); }
+  50% { transform: scale(1.1); filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.8)); }
+}
+
+/* Hourglass Spin Animation */
+.animate-spin-slow {
+  animation: spin 4s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Progress Sparkle Animation */
+.animate-sparkle {
+  animation: sparkle 3s infinite linear;
+}
+
+@keyframes sparkle {
+  0% { opacity: 0; transform: translateX(0); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(100%); }
+}
+
+/* Toggle Switch Animation */
+.toggle-switch {
+  transition: background-color 0.3s ease-in-out;
+}
+
+.toggle-switch-knob {
+  transition: transform 0.3s ease-in-out;
+}
+
+/* Remove Input Spinners */
+input[type="text"] {
+  -webkit-appearance: none;
+  -moz-appearance: textfield;
+}
