@@ -3,10 +3,19 @@
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { Toaster, toast } from "react-hot-toast";
-import { MerkleTree } from "merkletreejs";
-import keccak256 from "keccak256";
 
-const CONTRACT_ADDRESS = "0xa8d617D7bB2972d86d516b405a401c0bCb6D2407"; // Your deployed contract
+// Declare window.ethereum type inline at the top level
+declare global {
+  interface Window {
+    ethereum?: ethers.Eip1193Provider & {
+      request?: (...args: any[]) => Promise<any>;
+      on?: (eventName: string, callback: (...args: any[]) => void) => void;
+      removeListener?: (eventName: string, callback: (...args: any[]) => void) => void;
+    };
+  }
+}
+
+const CONTRACT_ADDRESS = "0x5bf26e5E6BB7BA332FD03387f9431515cd907C9A"; // Replace with your deployed address
 const OWNER_ADDRESS = "0xfF8b7625894441C26fEd460dD21360500BF4E767";
 const CONTRACT_ABI = [
   "function setMintPrice(uint256 _newPrice) external",
@@ -69,7 +78,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (typeof window.ethereum === "undefined") {
+    if (typeof window === "undefined" || !window.ethereum) {
       toast.error("Please install MetaMask!");
       return;
     }
@@ -79,9 +88,8 @@ export default function AdminPage() {
       await ethProvider.send("eth_requestAccounts", []);
 
       const chainIdHex = await ethProvider.send("eth_chainId", []);
-      console.log(`Chain ID from wallet: ${chainIdHex} (hex), ${parseInt(chainIdHex, 16)} (decimal)`);
       if (chainIdHex !== MONAD_TESTNET_CHAIN_ID) {
-        toast.error(`Wrong network! Please switch to Monad Testnet (Chain ID ${parseInt(MONAD_TESTNET_CHAIN_ID, 16)}). Current Chain ID: ${parseInt(chainIdHex, 16)}`);
+        toast.error(`Wrong network! Please switch to Monad Testnet (Chain ID ${parseInt(MONAD_TESTNET_CHAIN_ID, 16)})`);
         return;
       }
 
@@ -93,19 +101,20 @@ export default function AdminPage() {
         return;
       }
 
-      const nftContract = CONTRACT_ADDRESS ? new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer) : null;
+      const nftContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 
       setWalletConnected(true);
       setConnectedWallet(address);
       setProvider(ethProvider);
       setContract(nftContract);
       toast.success(`Connected: ${truncateAddress(address)}`);
-    } catch (error: any) {
-      if (error.code === 4001) {
+    } catch (error: unknown) {
+      const err = error as { code?: number; message?: string };
+      if (err.code === 4001) {
         toast.error("Connection rejected in MetaMask.");
       } else {
-        toast.error("Failed to connect wallet. Ensure you're on Monad Testnet (Chain ID 10143).");
-        console.error(error);
+        toast.error("Failed to connect wallet: " + (err.message || "Unknown error"));
+        console.error(err);
       }
     }
   };
@@ -118,7 +127,7 @@ export default function AdminPage() {
     toast.success("Wallet disconnected.");
   };
 
-  const truncateAddress = (address: string) => {
+  const truncateAddress = (address: string): string => {
     return `${address.slice(0, 5)}...${address.slice(-3)}`;
   };
 
@@ -133,8 +142,9 @@ export default function AdminPage() {
       await tx.wait();
       toast.success("Mint price updated!");
       setNewPrice("");
-    } catch (error: any) {
-      toast.error("Failed to update price: " + (error.reason || "Unknown error"));
+    } catch (error: unknown) {
+      const err = error as { reason?: string };
+      toast.error("Failed to update price: " + (err.reason || "Unknown error"));
       console.error(error);
     }
   };
@@ -149,15 +159,9 @@ export default function AdminPage() {
       return;
     }
 
-    // Parse UTC times directly from input
     const whitelistTimestamp = Math.floor(Date.parse(whitelistStart + ":00Z") / 1000);
     const publicTimestamp = Math.floor(Date.parse(publicStart + ":00Z") / 1000);
     const endTimestamp = Math.floor(Date.parse(mintEnd + ":00Z") / 1000);
-
-    console.log("Whitelist Timestamp (UTC):", whitelistTimestamp, new Date(whitelistTimestamp * 1000).toUTCString());
-    console.log("Public Timestamp (UTC):", publicTimestamp, new Date(publicTimestamp * 1000).toUTCString());
-    console.log("End Timestamp (UTC):", endTimestamp, new Date(endTimestamp * 1000).toUTCString());
-    console.log("Deployed whitelistStartTime:", Number(await contract.whitelistStartTime()));
 
     if (isNaN(whitelistTimestamp) || isNaN(publicTimestamp) || isNaN(endTimestamp)) {
       toast.error("Invalid UTC date format. Use YYYY-MM-DDThh:mm (UTC).");
@@ -188,17 +192,24 @@ export default function AdminPage() {
       setPublicStart("");
       setMintEnd("");
       fetchCurrentData();
-    } catch (error: any) {
-      toast.error(`Failed to update times: ${error.reason || "Unknown error"}`);
+    } catch (error: unknown) {
+      const err = error as { reason?: string };
+      toast.error(`Failed to update times: ${err.reason || "Unknown error"}`);
       console.error(error);
     }
   };
 
-  const isValidAddress = (addr: string) => {
+  const isValidAddress = (addr: string): boolean => {
     return /^0x[a-fA-F0-9]{40}$/.test(addr);
   };
 
-  const generateMerkleRoot = () => {
+  const generateMerkleRoot = async () => {
+    if (typeof window === "undefined") return; // Exit early if on server
+
+    // Dynamically import keccak256 and MerkleTree to avoid server-side execution
+    const keccak256 = (await import("keccak256")).default;
+    const { MerkleTree } = await import("merkletreejs");
+
     if (!whitelistAddresses) {
       toast.error("Please enter wallet addresses.");
       return;
@@ -207,15 +218,15 @@ export default function AdminPage() {
     try {
       const addresses = whitelistAddresses
         .split(/[\n,]+/)
-        .map(addr => addr.trim())
-        .filter(addr => isValidAddress(addr));
+        .map((addr) => addr.trim())
+        .filter((addr) => isValidAddress(addr));
 
       if (addresses.length === 0) {
         toast.error("No valid Ethereum addresses provided.");
         return;
       }
 
-      const leaves = addresses.map(addr => keccak256(addr));
+      const leaves = addresses.map((addr) => keccak256(addr));
       const merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
       const root = merkleTree.getHexRoot();
 
@@ -243,8 +254,9 @@ export default function AdminPage() {
       setWhitelistAddresses("");
       setGeneratedRoot("");
       fetchCurrentData();
-    } catch (error: any) {
-      toast.error("Failed to update whitelist root: " + (error.reason || "Unknown error"));
+    } catch (error: unknown) {
+      const err = error as { reason?: string };
+      toast.error("Failed to update whitelist root: " + (err.reason || "Unknown error"));
       console.error(error);
     }
   };
@@ -258,8 +270,9 @@ export default function AdminPage() {
       const tx = await contract.withdraw();
       await tx.wait();
       toast.success("Funds withdrawn successfully!");
-    } catch (error: any) {
-      toast.error("Withdrawal failed: " + (error.reason || "Unknown error"));
+    } catch (error: unknown) {
+      const err = error as { reason?: string };
+      toast.error("Withdrawal failed: " + (err.reason || "Unknown error"));
       console.error(error);
     }
   };
@@ -298,7 +311,7 @@ export default function AdminPage() {
         ) : (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
-              <span className="text-cyan-300 font-semibold">Connected: {truncateAddress(connectedWallet!)}</span>
+              <span className="text-cyan-300 font-semibold">Connected: {connectedWallet ? truncateAddress(connectedWallet) : "N/A"}</span>
               <button
                 onClick={disconnectWallet}
                 className="py-2 px-4 bg-red-600 hover:bg-red-700 rounded-lg font-semibold text-white transition-all duration-300"
@@ -326,7 +339,9 @@ export default function AdminPage() {
                   placeholder="Enter price in MON"
                   className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200"
                 />
-                <button onClick={setPrice} className="mt-2 w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">Update Price</button>
+                <button onClick={setPrice} className="mt-2 w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">
+                  Update Price
+                </button>
               </div>
 
               <div className="bg-gray-700 p-4 rounded-lg">
@@ -338,7 +353,6 @@ export default function AdminPage() {
                       type="datetime-local"
                       value={whitelistStart}
                       onChange={(e) => setWhitelistStart(e.target.value)}
-                      placeholder="YYYY-MM-DDThh:mm (UTC)"
                       className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200"
                     />
                   </div>
@@ -348,7 +362,6 @@ export default function AdminPage() {
                       type="datetime-local"
                       value={publicStart}
                       onChange={(e) => setPublicStart(e.target.value)}
-                      placeholder="YYYY-MM-DDThh:mm (UTC)"
                       className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200"
                     />
                   </div>
@@ -358,12 +371,13 @@ export default function AdminPage() {
                       type="datetime-local"
                       value={mintEnd}
                       onChange={(e) => setMintEnd(e.target.value)}
-                      placeholder="YYYY-MM-DDThh:mm (UTC)"
                       className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200"
                     />
                   </div>
                 </div>
-                <button onClick={setTimes} className="mt-4 w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">Update Times (UTC)</button>
+                <button onClick={setTimes} className="mt-4 w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">
+                  Update Times (UTC)
+                </button>
               </div>
 
               <div className="bg-gray-700 p-4 rounded-lg">
@@ -374,18 +388,24 @@ export default function AdminPage() {
                   placeholder="Paste addresses (comma or newline separated, e.g., 0x123..., 0x456...)"
                   className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200 h-24 resize-none"
                 />
-                <button onClick={generateMerkleRoot} className="mt-2 w-full py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 rounded-lg font-semibold transition-all duration-300">Generate Merkle Root</button>
+                <button onClick={generateMerkleRoot} className="mt-2 w-full py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 rounded-lg font-semibold transition-all duration-300">
+                  Generate Merkle Root
+                </button>
                 {generatedRoot && (
                   <div className="mt-2">
                     <p className="text-gray-200">Generated Merkle Root: <span className="text-cyan-300">{generatedRoot}</span></p>
-                    <button onClick={setWhitelistRootHandler} className="mt-2 w-full py-2 bg-gradient-to-r from-green-500 to-teal-500 hover:from-green-600 hover:to-teal-600 rounded-lg font-semibold transition-all duration-300">Set On-Chain</button>
+                    <button onClick={setWhitelistRootHandler} className="mt-2 w-full py-2 bg-gradient-to-r from-green-500 to-teal-500 hover:from-green-600 hover:to-teal-600 rounded-lg font-semibold transition-all duration-300">
+                      Set On-Chain
+                    </button>
                   </div>
                 )}
               </div>
 
               <div className="bg-gray-700 p-4 rounded-lg">
                 <h2 className="text-xl font-semibold text-cyan-300 mb-2">Withdraw Funds</h2>
-                <button onClick={withdrawFunds} className="w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">Withdraw</button>
+                <button onClick={withdrawFunds} className="w-full py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-lg font-semibold transition-all duration-300">
+                  Withdraw
+                </button>
               </div>
 
               <div className="bg-gray-700 p-4 rounded-lg">
@@ -400,7 +420,9 @@ export default function AdminPage() {
                       placeholder="Enter new title"
                       className="w-full p-2 bg-gray-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 border border-gray-600 hover:border-cyan-500 transition-all duration-200"
                     />
-                    <button onClick={updateTitle} className="mt-2 w-full py-2 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 rounded-lg font-semibold transition-all duration-300">Update Title</button>
+                    <button onClick={updateTitle} className="mt-2 w-full py-2 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 rounded-lg font-semibold transition-all duration-300">
+                      Update Title
+                    </button>
                   </div>
                   <div>
                     <label className="block text-gray-200 font-semibold mb-1">Image Animation</label>
@@ -414,7 +436,9 @@ export default function AdminPage() {
                       <option value="pulse">Pulse</option>
                       <option value="none">None</option>
                     </select>
-                    <button onClick={updateAnimation} className="mt-2 w-full py-2 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 rounded-lg font-semibold transition-all duration-300">Update Animation</button>
+                    <button onClick={updateAnimation} className="mt-2 w-full py-2 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 rounded-lg font-semibold transition-all duration-300">
+                      Update Animation
+                    </button>
                   </div>
                 </div>
               </div>
@@ -425,3 +449,6 @@ export default function AdminPage() {
     </div>
   );
 }
+
+// Disable static prerendering for this page
+export const dynamic = "force-dynamic";

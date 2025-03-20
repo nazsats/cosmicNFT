@@ -1,13 +1,22 @@
 "use client";
 
+// Declare window.ethereum type inline at the top level
+declare global {
+  interface Window {
+    ethereum?: ethers.Eip1193Provider & {
+      request?: (...args: any[]) => Promise<any>;
+      on?: (eventName: string, callback: (...args: any[]) => void) => void;
+      removeListener?: (eventName: string, callback: (...args: any[]) => void) => void;
+    };
+  }
+}
+
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { FaTwitter, FaGlobe } from "react-icons/fa";
 import { Toaster, toast } from "react-hot-toast";
 import confetti from "canvas-confetti";
 import { whitelistWallets } from "../data/wallets";
-import { keccak256 } from "keccak256";
-import { MerkleTree } from "merkletreejs";
 
 const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "0xa8d617D7bB2972d86d516b405a401c0bCb6D2407";
 const CONTRACT_ABI = [
@@ -20,6 +29,7 @@ const CONTRACT_ABI = [
   "function publicStartTime() public view returns (uint256)",
   "function mintEndTime() public view returns (uint256)",
   "function isWhitelisted(address account, bytes32[] calldata proof) external view returns (bool)",
+  "function whitelistRoot() public view returns (bytes32)",
 ];
 const MONAD_TESTNET_CHAIN_ID = "0x279f"; // Hex for 10143
 
@@ -83,14 +93,22 @@ export default function MintFeature() {
     return () => window.removeEventListener("storage", handleStorageChange);
   }, [contract]);
 
+  const generateProof = async (address: string) => {
+    if (typeof window === "undefined") return [];
+    const keccak256 = (await import("keccak256")).default;
+    const { MerkleTree } = await import("merkletreejs");
+    const leaves = whitelistWallets.map((addr) => keccak256(addr));
+    const merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
+    const root = merkleTree.getHexRoot();
+    console.log("Generated Merkle Root:", root);
+    const leaf = keccak256(address);
+    return merkleTree.getHexProof(leaf);
+  };
+
   const connectWallet = async () => {
     if (walletConnected) {
       setWalletConnected(false);
       setConnectedWallet(null);
-      const nftContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-    const proof = generateProof(address);
-    const isWhitelistedOnChain = await nftContract.isWhitelisted(address, proof);
-    setIsWhitelisted(isWhitelistedOnChain);
       setIsWhitelisted(false);
       setProvider(null);
       setContract(null);
@@ -101,7 +119,7 @@ export default function MintFeature() {
       return;
     }
 
-    if (typeof window.ethereum === "undefined") {
+    if (typeof window === "undefined" || !window.ethereum) {
       toast.error("Please install a wallet like MetaMask!");
       return;
     }
@@ -120,27 +138,39 @@ export default function MintFeature() {
       const address = await signer.getAddress();
       const nftContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
 
+      const storedRoot = await nftContract.whitelistRoot();
+      console.log("Stored Whitelist Root:", storedRoot);
+
+      let isWhitelistedOnChain = false;
+      try {
+        const proof = await generateProof(address);
+        isWhitelistedOnChain = await nftContract.isWhitelisted(address, proof);
+      } catch (error) {
+        console.error("isWhitelisted call failed:", error);
+        // Use generic toast instead of toast.warn
+        toast("Unable to verify whitelist status. Proceeding as non-whitelisted.", { icon: "⚠️" });
+      }
+
       setWalletConnected(true);
       setConnectedWallet(address);
       setProvider(ethProvider);
       setContract(nftContract);
-
-      const isWhitelisted = whitelistWallets.includes(address.toLowerCase());
-      setIsWhitelisted(isWhitelisted);
+      setIsWhitelisted(isWhitelistedOnChain);
 
       await updateUserMintedCount(nftContract, address);
-      toast.success(`Connected: ${truncateAddress(address)}`);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to connect wallet.");
+      toast.success(`Connected: ${truncateAddress(address)} ${isWhitelistedOnChain ? "(Whitelisted)" : "(Not Whitelisted)"}`);
+    } catch (error: unknown) {
+      const err = error as { message?: string };
+      toast.error("Failed to connect wallet: " + (err.message || "Unknown error"));
       console.error(error);
     }
   };
 
-  const truncateAddress = (address: string) => {
+  const truncateAddress = (address: string): string => {
     return `${address.slice(0, 5)}...${address.slice(-3)}`;
   };
 
-  const getRole = (count: number) => {
+  const getRole = (count: number): string => {
     if (count === 1) return "Normie";
     if (count === 2) return "Degen";
     if (count === 3) return "Based";
@@ -174,7 +204,7 @@ export default function MintFeature() {
     }
 
     const totalCost = ethers.parseEther(mintPrice) * BigInt(mintAmount);
-    const balance = await provider.getBalance(connectedWallet);
+    const balance = await provider!.getBalance(connectedWallet);
     if (balance < totalCost) {
       toast.error("Insufficient funds to complete the mint.");
       return;
@@ -182,8 +212,8 @@ export default function MintFeature() {
 
     setIsMinting(true);
     try {
-      const proof = now < publicStartTime && isWhitelisted ? generateProof(connectedWallet) : [];
-      console.log("Minting:", { mintAmount, proof, totalCost: ethers.formatEther(totalCost), phase: now < publicStartTime ? "Whitelist" : "Public" });
+      const proof = now < publicStartTime && isWhitelisted ? await generateProof(connectedWallet) : [];
+      console.log("Minting with:", { mintAmount, proof, totalCost: ethers.formatEther(totalCost), phase: now < publicStartTime ? "Whitelist" : "Public" });
       const tx = await contract.mintNFT(mintAmount, proof, { value: totalCost });
       const receipt = await tx.wait();
 
@@ -199,19 +229,13 @@ export default function MintFeature() {
 
       setShowPopup(true);
       setTimeout(() => setShowPopup(false), 5000);
-    } catch (error: any) {
-      toast.error("Minting failed: " + (error.reason || error.message || "Unknown error"));
+    } catch (error: unknown) {
+      const err = error as { reason?: string; message?: string };
+      toast.error("Minting failed: " + (err.reason || err.message || "Unknown error"));
       console.error(error);
     } finally {
       setIsMinting(false);
     }
-  };
-
-  const generateProof = (address: string) => {
-    const leaves = whitelistWallets.map(addr => keccak256(addr));
-    const merkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
-    const leaf = keccak256(address);
-    return merkleTree.getHexProof(leaf);
   };
 
   const updateUserMintedCount = async (nftContract: ethers.Contract, address: string) => {

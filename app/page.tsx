@@ -38,3 +38,6 @@ export default function Home() {
     </div>
   );
 }
+
+// Disable static prerendering for this page
+export const dynamic = "force-dynamic";
